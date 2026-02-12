@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Leistungserfassung
 
-## Getting Started
+Next.js Projekt mit TypeScript, Tailwind CSS, Supabase und Vercel Deployment.
 
-First, run the development server:
+## Setup
+
+### 1. Environment Variables
+
+Kopiere `.env.local.example` zu `.env.local` und fülle die Werte aus:
+
+```bash
+cp .env.local.example .env.local
+```
+
+Dann die Werte aus deinem Supabase Dashboard eintragen:
+- **SUPABASE_URL**: Settings → API → Project URL
+- **SUPABASE_SERVICE_ROLE_KEY**: Settings → API → Service Role Key
+
+### 2. Development Server starten
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Die App läuft dann auf [http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Supabase Database Schema
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Erstelle die benötigten Tabellen in deinem Supabase Dashboard unter **SQL Editor**.
 
-## Learn More
+Beispiel für eine `users` Tabelle:
 
-To learn more about Next.js, take a look at the following resources:
+```sql
+CREATE TABLE users (
+  id BIGSERIAL PRIMARY KEY,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+CREATE INDEX idx_users_email ON users(email);
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 4. Vercel Deployment
 
-## Deploy on Vercel
+1. Verbinde das GitHub Repository mit Vercel
+2. Setze die Environment Variables in Vercel:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+3. Deploy!
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Nützliche Befehle
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+# Development Server
+npm run dev
+
+# Production Build
+npm run build
+npm run start
+
+# TypeScript prüfen
+npm run type-check
+
+# Linting
+npm run lint
+```
+
+## Projektstruktur
+
+```
+leistungserfassung/
+├── app/
+│   ├── api/          # API Routes
+│   ├── components/   # React Components
+│   └── ...           # Pages
+├── public/           # Statische Assets
+└── types/            # TypeScript Types
+```
