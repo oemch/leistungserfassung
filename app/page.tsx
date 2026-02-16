@@ -243,6 +243,11 @@ export default function Home() {
             setOpenFromFab(false);
             setStopModalOpen(true);
           }}
+          onEntryDelete={async (entry) => {
+            if (!entry.id) return;
+            const res = await fetch(`/api/entries/${entry.id}`, { method: "DELETE" });
+            if (res.ok) setSavedEntriesForToday((prev) => prev.filter((e) => e.id !== entry.id));
+          }}
         />
       </main>
       <Fab

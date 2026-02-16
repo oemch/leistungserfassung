@@ -8,11 +8,13 @@ interface DayCellProps {
   isToday: boolean;
   isWeekend: boolean;
   entries: Entry[];
-  /** Nur bei Einträgen mit id aufgerufen (gespeicherte Einträge), nicht bei Live. */
+  /** Klick auf Eintrag (ohne Trash) – nur bei Einträgen mit id. */
   onEntryClick?: (entry: Entry) => void;
+  /** Klick auf Trash – Eintrag löschen, nur bei Einträgen mit id. */
+  onEntryDelete?: (entry: Entry) => void;
 }
 
-export function DayCell({ day, month, hours, isToday, isWeekend, entries, onEntryClick }: DayCellProps) {
+export function DayCell({ day, month, hours, isToday, isWeekend, entries, onEntryClick, onEntryDelete }: DayCellProps) {
   const isFrei = isWeekend && entries.length === 0;
 
   return (
@@ -47,15 +49,42 @@ export function DayCell({ day, month, hours, isToday, isWeekend, entries, onEntr
           ) : null
         ) : (
           entries.map((e, i) =>
-            e.id && onEntryClick ? (
-              <button
+            e.id && (onEntryClick || onEntryDelete) ? (
+              <div
                 key={e.id}
-                type="button"
-                onClick={() => onEntryClick(e)}
-                className="text-left w-full rounded hover:opacity-90 transition-opacity"
+                className="group relative w-full rounded min-w-0 text-xs overflow-hidden"
+                style={{ backgroundColor: e.bg, color: e.fg }}
               >
-                <TaskChip text={e.text} bg={e.bg} fg={e.fg} startTime={e.startTime} endTime={e.endTime} />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onEntryClick?.(e)}
+                  className="text-left w-full px-2 py-0.5 pr-7 rounded hover:opacity-90 transition-opacity"
+                  style={{ color: e.fg }}
+                >
+                  {(e.startTime != null || e.endTime != null) && (
+                    <span className="block truncate" style={{ lineHeight: 1.2 }}>
+                      {e.startTime ?? "–"} – {e.endTime ?? "–"}
+                    </span>
+                  )}
+                  <span className={`block truncate ${e.startTime != null || e.endTime != null ? "mt-0.5" : ""}`} style={{ lineHeight: 1.2 }}>
+                    {e.text}
+                  </span>
+                </button>
+                {onEntryDelete && (
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onEntryDelete(e);
+                    }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-5 h-5 rounded opacity-0 group-hover:opacity-100 hover:bg-black/10 transition-opacity"
+                    style={{ color: e.fg }}
+                    aria-label="Eintrag löschen"
+                  >
+                    <span className="material-icons" style={{ fontSize: 16 }} aria-hidden>delete</span>
+                  </button>
+                )}
+              </div>
             ) : (
               <TaskChip key={i} text={e.text} bg={e.bg} fg={e.fg} startTime={e.startTime} endTime={e.endTime} />
             )
