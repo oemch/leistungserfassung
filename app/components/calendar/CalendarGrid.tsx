@@ -11,6 +11,7 @@ interface CalendarGridProps {
   getHours: (day: number) => string;
   entriesByDay: Record<string, Entry[]>;
   weekTotals: [string, string];
+  onEntryClick?: (entry: Entry) => void;
 }
 
 export function CalendarGrid({
@@ -22,6 +23,7 @@ export function CalendarGrid({
   getHours,
   entriesByDay,
   weekTotals,
+  onEntryClick,
 }: CalendarGridProps) {
   return (
     <div className="w-full max-w-[1854px] mx-auto overflow-x-auto min-w-0">
@@ -59,6 +61,7 @@ export function CalendarGrid({
             isWeekend={isWeekend(day)}
             entries={entriesByDay[String(day)] ?? []}
             hours={getHours(day)}
+            onEntryClick={onEntryClick}
           />
         ))}
         <div className="flex items-center justify-center text-sm font-medium" style={{ color: "var(--figma-neutral-40)" }}>
@@ -73,6 +76,7 @@ export function CalendarGrid({
             isWeekend={isWeekend(day)}
             entries={entriesByDay[String(day)] ?? []}
             hours={getHours(day)}
+            onEntryClick={onEntryClick}
           />
         ))}
         <div className="flex items-center justify-center text-sm font-medium" style={{ color: "var(--figma-neutral-40)" }}>

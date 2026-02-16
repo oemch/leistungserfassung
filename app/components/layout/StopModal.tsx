@@ -1,28 +1,25 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-
-const PROJECT_OPTIONS = [
-  "Projekt A",
-  "Projekt B",
-  "Projekt C",
-  "Projekt D",
-  "Interne Schulung (IS)",
-  "Administration",
-] as const;
-
-const TICKET_OPTIONS = [
-  "Feature 1234",
-  "Feature 8392",
-  "Ticket 2445",
-  "Ticket 6372",
-] as const;
+import type { EntryPayload } from "@/lib/types";
+import { PROJECT_OPTIONS, TICKET_OPTIONS } from "@/lib/constants";
+import { durationFromTimes, parseDurationHours, endTimeFromStartAndHours } from "@/lib/timeUtils";
 
 interface StopModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Wird mit dem gewählten Projekt- oder Ticket-Label aufgerufen (Eintrag in Kachel damit anzeigen). */
-  onConfirm: (entryLabel: string) => void;
+  /** Abbrechen: Dialog schließen, ggf. Timer zurücksetzen. */
+  onCancel: () => void;
+  /** Löschen: Eintrag endgültig löschen (nur bei Bearbeitung, id wird übergeben). */
+  onDelete?: (entryId: string) => void;
+  /** Wird mit vollem Payload aufgerufen (neu oder Bearbeitung). */
+  onConfirm: (payload: EntryPayload) => void;
+  /** Öffnung via FAB: alle Felder leer (kein Timer-Kontext). */
+  openFromFab?: boolean;
+  /** Beim Bearbeiten: Vorbelegung aus gespeichertem Eintrag. */
+  initialData?: EntryPayload | null;
+  /** Vorbelegung aus der Timer-Bar (bei Öffnung via Stopp oder Details). */
+  barPrefill?: { project: string | null; ticket: string | null; comment: string } | null;
   startTimeFormatted: string | null;
   elapsed: string;
 }
@@ -44,27 +41,20 @@ function useDerivedTimes(
   return { endTime, durationHours };
 }
 
-/** Berechnet Dauer in Std. aus zwei Zeitstrings "HH:MM". */
-function durationFromTimes(start: string, end: string): string {
-  if (!start || !end) return "0,00";
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  const startM = (sh ?? 0) * 60 + (sm ?? 0);
-  const endM = (eh ?? 0) * 60 + (em ?? 0);
-  let diffM = endM - startM;
-  if (diffM < 0) diffM = 0;
-  const hours = (diffM / 60).toFixed(2).replace(".", ",");
-  return hours;
-}
-
 export function StopModal({
   isOpen,
   onClose,
+  onCancel,
+  onDelete,
   onConfirm,
+  openFromFab = false,
+  initialData = null,
+  barPrefill = null,
   startTimeFormatted,
   elapsed,
 }: StopModalProps) {
   const [comment, setComment] = useState("Meeting mit Sebastian Weber");
+  const [isBillable, setIsBillable] = useState(true);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
@@ -102,14 +92,35 @@ export function StopModal({
 
   useEffect(() => {
     if (isOpen) {
-      setStartInput(startTimeFormatted ?? "");
-      setEndInput(endTime);
+      if (initialData) {
+        setComment(initialData.comment ?? "");
+        setStartInput(initialData.startTime ?? "");
+        setEndInput(initialData.endTime ?? "");
+        setIsBillable(initialData.isBillable !== false);
+        const label = initialData.label ?? "";
+        setSelectedProject(PROJECT_OPTIONS.some((o) => o === label) ? label : null);
+        setSelectedTicket(TICKET_OPTIONS.some((o) => o === label) ? label : null);
+      } else if (openFromFab) {
+        setComment("");
+        setStartInput("");
+        setEndInput("");
+        setIsBillable(true);
+      } else {
+        setStartInput(startTimeFormatted ?? "");
+        setEndInput(endTime);
+        if (barPrefill) {
+          setComment(barPrefill.comment ?? "");
+          setSelectedProject(barPrefill.project ?? null);
+          setSelectedTicket(barPrefill.ticket ?? null);
+        }
+      }
     }
-  }, [isOpen, startTimeFormatted, endTime]);
+  }, [isOpen, openFromFab, initialData, barPrefill, startTimeFormatted, endTime]);
 
   useEffect(() => {
     if (!isOpen) {
       setComment("Meeting mit Sebastian Weber");
+      setIsBillable(true);
       setSelectedProject(null);
       setProjectDropdownOpen(false);
       setSelectedTicket(null);
@@ -132,7 +143,7 @@ export function StopModal({
         type="button"
         className="absolute inset-0"
         style={{ backgroundColor: "var(--figma-neutral-32)", opacity: 0.5 }}
-        onClick={onClose}
+        onClick={onCancel}
         aria-label="Dialog schließen"
       />
       {/* Dialog: Figma Erfassungsdialog 514x786 */}
@@ -157,42 +168,71 @@ export function StopModal({
         {/* Content scroll */}
         <div className="flex-1 overflow-y-auto">
           <div className="px-6 py-4">
-            {/* Uhrzeit: Start und Ende (Inputs), rechts Dauer (berechnet) */}
+            {/* Uhrzeit: Start, Endzeit, Dauer (Std.) – Layout wie Referenz: [Start] – [Ende] Uhr  [Dauer] Std. */}
             <div
               className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"
               style={{ fontFamily: "var(--font-coop), Coop, sans-serif" }}
             >
               <div className="flex items-center gap-2">
-                <input
-                  type="time"
-                  value={startInput}
-                  onChange={(e) => setStartInput(e.target.value)}
-                  className="tabular-nums rounded-lg border px-2 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0"
-                  style={{
-                    borderColor: "var(--figma-neutral-85)",
-                    color: "var(--figma-bw-black)",
-                    fontSize: 18,
+                <div className="relative">
+                  <input
+                    type="time"
+                    value={startInput}
+                    onChange={(e) => setStartInput(e.target.value)}
+                    className="tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)] [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    style={{
+                      borderColor: "var(--figma-neutral-85)",
+                      color: "var(--figma-bw-black)",
+                      fontSize: 18,
+fontWeight: 400,
                   }}
-                  aria-label="Startzeit"
-                />
-                <span style={{ color: "var(--figma-bw-black)", fontSize: 18 }}>–</span>
-                <input
-                  type="time"
-                  value={endInput}
-                  onChange={(e) => setEndInput(e.target.value)}
-                  className="tabular-nums rounded-lg border px-2 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0"
-                  style={{
-                    borderColor: "var(--figma-neutral-85)",
-                    color: "var(--figma-bw-black)",
-                    fontSize: 18,
+                    aria-label="Startzeit"
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--figma-bw-black)]" aria-hidden>
+                    <ClockIcon />
+                  </span>
+                </div>
+                <span style={{ color: "var(--figma-bw-black)", fontSize: 18, fontWeight: 400 }}>–</span>
+                <div className="relative">
+                  <input
+                    type="time"
+                    value={endInput}
+                    onChange={(e) => setEndInput(e.target.value)}
+                    className="tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)] [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    style={{
+                      borderColor: "var(--figma-neutral-85)",
+                      color: "var(--figma-bw-black)",
+                      fontSize: 18,
+fontWeight: 400,
                   }}
-                  aria-label="Endzeit"
-                />
+                    aria-label="Endzeit"
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--figma-bw-black)]" aria-hidden>
+                    <ClockIcon />
+                  </span>
+                </div>
                 <span style={{ color: "var(--figma-bw-black)", fontSize: 18 }}>Uhr</span>
               </div>
-              <span className="tabular-nums shrink-0" style={{ color: "var(--figma-bw-black)", fontSize: 18 }}>
-                {durationDisplay} Std.
-              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={durationDisplay}
+                  onChange={(e) => {
+                    const hours = parseDurationHours(e.target.value);
+                    if (hours != null) setEndInput(endTimeFromStartAndHours(startInput, hours));
+                  }}
+                  className="tabular-nums rounded-lg border px-2 py-1.5 w-16 text-right outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)]"
+                  style={{
+                    borderColor: "var(--figma-neutral-85)",
+                    color: "var(--figma-bw-black)",
+                    fontSize: 18,
+                    fontWeight: 400,
+                  }}
+                  aria-label="Dauer in Stunden"
+                />
+                <span style={{ color: "var(--figma-bw-black)", fontSize: 18, fontWeight: 400 }}>Std.</span>
+              </div>
             </div>
 
             <Separator />
@@ -418,7 +458,7 @@ export function StopModal({
 
             <div className="flex items-center justify-end gap-3">
               <span style={{ color: "var(--figma-bw-black)", fontSize: 14 }}>Ist verrechenbar</span>
-              <ToggleSwitch />
+              <ToggleSwitch checked={isBillable} onChange={setIsBillable} />
             </div>
           </div>
         </div>
@@ -430,6 +470,13 @@ export function StopModal({
         >
           <button
             type="button"
+            onClick={() => {
+              if (initialData?.id && onDelete) {
+                onDelete(initialData.id);
+              } else {
+                onCancel();
+              }
+            }}
             className="rounded px-2 py-1.5 font-bold hover:bg-[var(--figma-red-2)]"
             style={{ color: "var(--figma-neutral-40)", fontSize: 14 }}
           >
@@ -438,7 +485,7 @@ export function StopModal({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={onCancel}
               className="rounded-lg px-4 py-2 font-bold hover:opacity-90"
               style={{ color: "var(--figma-neutral-40)", fontSize: 14 }}
             >
@@ -449,7 +496,14 @@ export function StopModal({
               disabled={!canSave}
               onClick={() => {
                 const label = selectedProject ?? selectedTicket ?? "";
-                onConfirm(label);
+                onConfirm({
+                  id: initialData?.id,
+                  label,
+                  startTime: startInput,
+                  endTime: endInput,
+                  comment,
+                  isBillable: isBillable,
+                });
                 onClose();
               }}
               className="rounded-lg px-4 py-2 font-bold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:hover:opacity-100"
@@ -472,6 +526,15 @@ function Separator() {
   return <div className="my-3 border-t border-[var(--figma-neutral-85)]" />;
 }
 
+function ClockIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </svg>
+  );
+}
+
 function CloseIcon({ small, size }: { small?: boolean; size?: number }) {
   const s = size ?? (small ? 10 : 16);
   return (
@@ -489,15 +552,20 @@ function ChevronDownIcon() {
   );
 }
 
-function ToggleSwitch() {
+function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       type="button"
       role="switch"
-      aria-checked="true"
-      className="h-6 w-11 rounded-full bg-[var(--figma-primary)] px-1 transition-colors"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="h-6 w-11 rounded-full px-1 transition-colors"
+      style={{ backgroundColor: checked ? "var(--figma-primary)" : "var(--figma-neutral-80)" }}
     >
-      <span className="block h-4 w-4 rounded-full bg-white shadow" style={{ transform: "translateX(18px)" }} />
+      <span
+        className="block h-4 w-4 rounded-full bg-white shadow transition-transform"
+        style={{ transform: checked ? "translateX(18px)" : "translateX(2px)" }}
+      />
     </button>
   );
 }

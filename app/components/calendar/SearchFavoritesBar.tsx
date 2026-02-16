@@ -16,7 +16,7 @@ export function SearchFavoritesBar() {
           <span
             key={f.label}
             className="text-xs px-2.5 rounded whitespace-nowrap h-7 inline-flex items-center justify-center"
-            style={{ backgroundColor: f.bg, color: f.fg, borderRadius: 4 }}
+            style={{ backgroundColor: f.bg, color: "#00271D", borderRadius: 4 }}
           >
             {f.label}
           </span>

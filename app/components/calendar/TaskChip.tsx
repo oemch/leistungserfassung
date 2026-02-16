@@ -1,15 +1,26 @@
 import type { Entry } from "@/lib/types";
 
-interface TaskChipProps extends Pick<Entry, "text" | "bg" | "fg"> {}
+interface TaskChipProps extends Pick<Entry, "text" | "bg" | "fg"> {
+  startTime?: string;
+  endTime?: string;
+}
 
-export function TaskChip({ text, bg, fg }: TaskChipProps) {
+export function TaskChip({ text, bg, fg, startTime, endTime }: TaskChipProps) {
+  const hasTime = startTime != null || endTime != null;
   return (
     <span
-      className="text-xs px-2 py-0.5 rounded truncate block"
+      className="text-xs px-2 py-0.5 rounded block overflow-hidden"
       style={{ backgroundColor: bg, color: fg }}
       title={text}
     >
-      {text}
+      {hasTime && (
+        <span className="block truncate" style={{ lineHeight: 1.2 }}>
+          {startTime ?? "–"} – {endTime ?? "–"}
+        </span>
+      )}
+      <span className={`block truncate ${hasTime ? "mt-0.5" : ""}`} style={{ lineHeight: 1.2 }}>
+        {text}
+      </span>
     </span>
   );
 }

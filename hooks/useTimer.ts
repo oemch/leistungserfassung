@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
+/** Demo: 1 reale Sekunde = diese Anzahl Timer-Sekunden (100 = 100× schneller). */
+const DEMO_TIMER_SPEED = 100;
+const TICK_MS = 1000 / DEMO_TIMER_SPEED;
+
 function formatElapsed(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -33,7 +37,7 @@ export function useTimer(options?: { onStop?: (startTime: string) => void }) {
     setIsRunning(true);
     intervalRef.current = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
+    }, TICK_MS);
   }, []);
 
   const pause = useCallback(() => {
@@ -49,7 +53,7 @@ export function useTimer(options?: { onStop?: (startTime: string) => void }) {
     pausedRef.current = false;
     intervalRef.current = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
+    }, TICK_MS);
   }, []);
 
   const stop = useCallback((skipOnStop?: boolean) => {

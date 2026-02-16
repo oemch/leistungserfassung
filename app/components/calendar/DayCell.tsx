@@ -8,16 +8,18 @@ interface DayCellProps {
   isToday: boolean;
   isWeekend: boolean;
   entries: Entry[];
+  /** Nur bei Einträgen mit id aufgerufen (gespeicherte Einträge), nicht bei Live. */
+  onEntryClick?: (entry: Entry) => void;
 }
 
-export function DayCell({ day, month, hours, isToday, isWeekend, entries }: DayCellProps) {
+export function DayCell({ day, month, hours, isToday, isWeekend, entries, onEntryClick }: DayCellProps) {
   const isFrei = isWeekend && entries.length === 0;
 
   return (
     <div
       className={`rounded-lg border p-3 w-full min-w-0 h-[336px] flex flex-col box-border ${
         isToday
-          ? "border-[var(--figma-primary)] bg-[color-mix(in_srgb,var(--figma-primary)_8%,white)]"
+          ? "border-[var(--figma-primary)] bg-[#F5FAF9]"
           : "border-[var(--figma-neutral-85)] bg-[var(--figma-bw-white)]"
       }`}
     >
@@ -44,7 +46,20 @@ export function DayCell({ day, month, hours, isToday, isWeekend, entries }: DayC
             </span>
           ) : null
         ) : (
-          entries.map((e, i) => <TaskChip key={i} text={e.text} bg={e.bg} fg={e.fg} />)
+          entries.map((e, i) =>
+            e.id && onEntryClick ? (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => onEntryClick(e)}
+                className="text-left w-full rounded hover:opacity-90 transition-opacity"
+              >
+                <TaskChip text={e.text} bg={e.bg} fg={e.fg} startTime={e.startTime} endTime={e.endTime} />
+              </button>
+            ) : (
+              <TaskChip key={i} text={e.text} bg={e.bg} fg={e.fg} startTime={e.startTime} endTime={e.endTime} />
+            )
+          )
         )}
       </div>
     </div>
