@@ -2,9 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
-/** Demo: 1 reale Sekunde = diese Anzahl Timer-Sekunden (100 = 100× schneller). */
-const DEMO_TIMER_SPEED = 100;
-const TICK_MS = 1000 / DEMO_TIMER_SPEED;
+const TICK_MS = 1000;
 
 function formatElapsed(seconds: number): string {
   const h = Math.floor(seconds / 3600);

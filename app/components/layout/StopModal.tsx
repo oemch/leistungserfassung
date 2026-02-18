@@ -1,571 +1,566 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import type { EntryPayload } from "@/lib/types";
-import { PROJECT_OPTIONS, TICKET_OPTIONS } from "@/lib/constants";
+import { useState, useEffect } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import * as Switch from "@radix-ui/react-switch";
+import { Clock, X, ChevronDown, ChevronUp, Ticket, UserPlus } from "lucide-react";
+import type { Entry, EntryPayload } from "@/lib/types";
+import { LEISTUNG_OPTIONS, TICKET_OPTIONS } from "@/lib/constants";
+import { Combobox } from "@/app/components/ui/Combobox";
 import { durationFromTimes, parseDurationHours, endTimeFromStartAndHours } from "@/lib/timeUtils";
+import { suggestLeistung } from "@/lib/apiClient";
+import { useStopModalForm } from "@/hooks/useStopModalForm";
+import { SiJira } from "react-icons/si";
+import { extractJiraTicketId, getJiraUrl, isProjectEntry, getMockJiraDetails, isItsmTicketId } from "@/lib/jira";
+import { getItsmUrl, getMockItsmDetails } from "@/lib/itsm";
+import { useUser } from "@/lib/UserContext";
+import { getChipStyleForLabel } from "@/lib/constants";
 
 interface StopModalProps {
+  userSlug?: string;
   isOpen: boolean;
   onClose: () => void;
-  /** Abbrechen: Dialog schließen, ggf. Timer zurücksetzen. */
   onCancel: () => void;
-  /** Löschen: Eintrag endgültig löschen (nur bei Bearbeitung, id wird übergeben). */
   onDelete?: (entryId: string) => void;
-  /** Wird mit vollem Payload aufgerufen (neu oder Bearbeitung). */
-  onConfirm: (payload: EntryPayload) => void;
-  /** Öffnung via FAB: alle Felder leer (kein Timer-Kontext). */
+  onDeleteSuggestion?: () => void;
+  acceptedSuggestionId?: string | null;
+  onConfirm: (
+    payload: EntryPayload,
+    options?: { savedWhileRunning?: boolean; barPrefillToKeep?: { project: string | null; ticket: string | null; comment: string } }
+  ) => void;
   openFromFab?: boolean;
-  /** Beim Bearbeiten: Vorbelegung aus gespeichertem Eintrag. */
+  addEntryPrefill?: { startTime: string; endTime: string; project?: string; ticket?: string } | null;
   initialData?: EntryPayload | null;
-  /** Vorbelegung aus der Timer-Bar (bei Öffnung via Stopp oder Details). */
   barPrefill?: { project: string | null; ticket: string | null; comment: string } | null;
+  fromDetailsWhileRunning?: boolean;
+  onBarPrefillChange?: (prefill: { project: string | null; ticket: string | null; comment: string }) => void;
   startTimeFormatted: string | null;
   elapsed: string;
-}
-
-/** Berechnet Endzeit (Start + Dauer) und Dauer in Std. für Anzeige. */
-function useDerivedTimes(
-  startTimeFormatted: string | null,
-  elapsed: string
-): { endTime: string; durationHours: string } {
-  if (!startTimeFormatted || !elapsed) return { endTime: "--:--", durationHours: "0" };
-  const [h, m, s] = elapsed.split(":").map(Number);
-  const totalMinutes = (h ?? 0) * 60 + (m ?? 0) + (s ?? 0) / 60;
-  const [sh, sm] = startTimeFormatted.split(":").map(Number);
-  let endM = (sm ?? 0) + totalMinutes;
-  let endH = (sh ?? 0) + Math.floor(endM / 60);
-  endM = endM % 60;
-  const endTime = `${String(endH).padStart(2, "0")}:${String(Math.round(endM)).padStart(2, "0")}`;
-  const durationHours = (totalMinutes / 60).toFixed(2).replace(".", ",");
-  return { endTime, durationHours };
+  dateLabel: string;
+  dateStr?: string;
+  entriesOnDate?: Entry[];
+  leistungen?: string[];
+  ticketOptions?: string[];
+  favorites?: { label: string; bg: string; fg: string }[];
+  onOpenSendToMember?: (entry: Entry, dateStr: string) => void;
+  /** Mobile: Sheet von unten statt zentriertes Modal */
+  variant?: "modal" | "sheet";
 }
 
 export function StopModal({
+  userSlug: userSlugProp,
   isOpen,
   onClose,
   onCancel,
   onDelete,
+  onDeleteSuggestion,
+  acceptedSuggestionId,
   onConfirm,
   openFromFab = false,
+  addEntryPrefill = null,
   initialData = null,
   barPrefill = null,
+  fromDetailsWhileRunning = false,
+  onBarPrefillChange,
   startTimeFormatted,
   elapsed,
+  dateLabel,
+  dateStr: modalDateStr,
+  entriesOnDate = [],
+  leistungen: leistungenProp = [],
+  ticketOptions: ticketOptionsProp,
+  favorites: favoritesProp = [],
+  onOpenSendToMember,
+  variant = "modal",
 }: StopModalProps) {
-  const [comment, setComment] = useState("Meeting mit Sebastian Weber");
-  const [isBillable, setIsBillable] = useState(true);
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
-  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
-  const projectDropdownRef = useRef<HTMLDivElement>(null);
-  const [selectedTicket, setSelectedTicket] = useState<string | null>(null);
-  const [ticketDropdownOpen, setTicketDropdownOpen] = useState(false);
-  const ticketDropdownRef = useRef<HTMLDivElement>(null);
-  const { endTime } = useDerivedTimes(startTimeFormatted, elapsed);
-  const [startInput, setStartInput] = useState("");
-  const [endInput, setEndInput] = useState("");
+  const leistungen = leistungenProp.length > 0 ? leistungenProp : [...LEISTUNG_OPTIONS];
+  const ticketOptionsBase: string[] = (ticketOptionsProp?.length ?? 0) > 0 ? ticketOptionsProp! : [...TICKET_OPTIONS];
+  const quickFavorites = favoritesProp.slice(0, 4);
+  const { userSlug: userSlugFromContext } = useUser();
+  const userSlug = userSlugProp ?? userSlugFromContext;
+  const [weitereFelderOpen, setWeitereFelderOpen] = useState(false);
 
   useEffect(() => {
-    if (!projectDropdownOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
-        setProjectDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [projectDropdownOpen]);
-
-  useEffect(() => {
-    if (!ticketDropdownOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (ticketDropdownRef.current && !ticketDropdownRef.current.contains(e.target as Node)) {
-        setTicketDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [ticketDropdownOpen]);
-
-  const durationDisplay = durationFromTimes(startInput, endInput);
-  const canSave = !!(selectedProject || selectedTicket);
-
-  useEffect(() => {
-    if (isOpen) {
-      if (initialData) {
-        setComment(initialData.comment ?? "");
-        setStartInput(initialData.startTime ?? "");
-        setEndInput(initialData.endTime ?? "");
-        setIsBillable(initialData.isBillable !== false);
-        const label = initialData.label ?? "";
-        setSelectedProject(PROJECT_OPTIONS.some((o) => o === label) ? label : null);
-        setSelectedTicket(TICKET_OPTIONS.some((o) => o === label) ? label : null);
-      } else if (openFromFab) {
-        setComment("");
-        setStartInput("");
-        setEndInput("");
-        setIsBillable(true);
-      } else {
-        setStartInput(startTimeFormatted ?? "");
-        setEndInput(endTime);
-        if (barPrefill) {
-          setComment(barPrefill.comment ?? "");
-          setSelectedProject(barPrefill.project ?? null);
-          setSelectedTicket(barPrefill.ticket ?? null);
-        }
-      }
-    }
-  }, [isOpen, openFromFab, initialData, barPrefill, startTimeFormatted, endTime]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setComment("Meeting mit Sebastian Weber");
-      setIsBillable(true);
-      setSelectedProject(null);
-      setProjectDropdownOpen(false);
-      setSelectedTicket(null);
-      setTicketDropdownOpen(false);
-      setStartInput("");
-      setEndInput("");
-    }
+    if (!isOpen) setWeitereFelderOpen(false);
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  const form = useStopModalForm({
+    isOpen,
+    openFromFab,
+    addEntryPrefill,
+    initialData,
+    barPrefill,
+    fromDetailsWhileRunning,
+    startTimeFormatted,
+    elapsed,
+    entriesOnDate,
+    leistungen,
+    ticketOptions: ticketOptionsBase,
+    modalDateStr,
+    onBarPrefillChange,
+  });
+
+  const {
+    comment,
+    setComment,
+    isBillable,
+    setIsBillable,
+    selectedProject,
+    setSelectedProject,
+    selectedTicket,
+    setSelectedTicket,
+    startInput,
+    setStartInput,
+    endInput,
+    setEndInput,
+    durationInput,
+    setDurationInput,
+    durationFocused,
+    setDurationFocused,
+    durationDisplay,
+    canSave,
+    suggestedStart,
+    endTime,
+  } = form;
+
+  const isSheet = variant === "sheet";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="stop-modal-title"
-    >
-      <button
-        type="button"
-        className="absolute inset-0"
-        style={{ backgroundColor: "var(--figma-neutral-32)", opacity: 0.5 }}
-        onClick={onCancel}
-        aria-label="Dialog schließen"
-      />
-      {/* Dialog: Figma Erfassungsdialog 514x786 */}
-      <div
-        className="relative z-10 flex w-full max-w-[514px] flex-col overflow-hidden rounded-xl bg-[var(--figma-bw-white)] shadow-lg"
-        style={{ maxHeight: "90vh", border: "1px solid var(--figma-neutral-85)" }}
-      >
-        {/* Header: Datum fix 23.02.2026 */}
+    <Dialog.Root open={isOpen} onOpenChange={(open) => !open && onCancel()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-neutral-32/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <div
-          className="flex shrink-0 items-center px-6 pt-6 pb-4"
-          style={{ borderBottom: "1px solid var(--figma-neutral-85)" }}
+          className={`fixed inset-0 z-50 pointer-events-none ${isSheet ? "flex items-end justify-center" : "flex items-center justify-center p-4"}`}
         >
-          <p
-            id="stop-modal-title"
-            className="font-bold"
-            style={{ color: "var(--figma-bw-black)", fontSize: 16 }}
+          <Dialog.Content
+            className={`pointer-events-auto w-full flex flex-col overflow-hidden bg-white border border-neutral-85 shadow-lg transition-transform duration-300 ease-out ${
+              isSheet
+                ? "max-h-[90vh] max-w-[100vw] rounded-t-xl border-b-0 pb-[env(safe-area-inset-bottom,0px)] data-[state=closed]:translate-y-full data-[state=open]:translate-y-0"
+                : "max-w-[514px] max-h-[90vh] rounded-xl"
+            }`}
+            aria-describedby={undefined}
+            onEscapeKeyDown={onCancel}
+            onPointerDownOutside={onCancel}
+            onOpenAutoFocus={isSheet ? (e) => e.preventDefault() : undefined}
           >
-            Montag, 23.02.2026
-          </p>
-        </div>
-
-        {/* Content scroll */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="px-6 py-4">
-            {/* Uhrzeit: Start, Endzeit, Dauer (Std.) – Layout wie Referenz: [Start] – [Ende] Uhr  [Dauer] Std. */}
-            <div
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"
-              style={{ fontFamily: "var(--font-coop), Coop, sans-serif" }}
-            >
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <input
-                    type="time"
-                    value={startInput}
-                    onChange={(e) => setStartInput(e.target.value)}
-                    className="tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)] [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-                    style={{
-                      borderColor: "var(--figma-neutral-85)",
-                      color: "var(--figma-bw-black)",
-                      fontSize: 18,
-fontWeight: 400,
-                  }}
-                    aria-label="Startzeit"
-                  />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--figma-bw-black)]" aria-hidden>
-                    <ClockIcon />
-                  </span>
-                </div>
-                <span style={{ color: "var(--figma-bw-black)", fontSize: 18, fontWeight: 400 }}>–</span>
-                <div className="relative">
-                  <input
-                    type="time"
-                    value={endInput}
-                    onChange={(e) => setEndInput(e.target.value)}
-                    className="tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)] [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-                    style={{
-                      borderColor: "var(--figma-neutral-85)",
-                      color: "var(--figma-bw-black)",
-                      fontSize: 18,
-fontWeight: 400,
-                  }}
-                    aria-label="Endzeit"
-                  />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--figma-bw-black)]" aria-hidden>
-                    <ClockIcon />
-                  </span>
-                </div>
-                <span style={{ color: "var(--figma-bw-black)", fontSize: 18 }}>Uhr</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={durationDisplay}
-                  onChange={(e) => {
-                    const hours = parseDurationHours(e.target.value);
-                    if (hours != null) setEndInput(endTimeFromStartAndHours(startInput, hours));
-                  }}
-                  className="tabular-nums rounded-lg border px-2 py-1.5 w-16 text-right outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 bg-[var(--figma-bw-white)]"
-                  style={{
-                    borderColor: "var(--figma-neutral-85)",
-                    color: "var(--figma-bw-black)",
-                    fontSize: 18,
-                    fontWeight: 400,
-                  }}
-                  aria-label="Dauer in Stunden"
-                />
-                <span style={{ color: "var(--figma-bw-black)", fontSize: 18, fontWeight: 400 }}>Std.</span>
-              </div>
+            <div className="flex shrink-0 items-center px-6 pt-6 pb-4 border-b border-neutral-85">
+              <Dialog.Title className="font-bold text-ink text-base">{dateLabel}</Dialog.Title>
             </div>
 
-            <Separator />
-
-            {/* Projekt (Dropdown) – inaktiv wenn Ticket gewählt */}
-            <div className="relative" ref={projectDropdownRef}>
-              <button
-                type="button"
-                disabled={!!selectedTicket}
-                onClick={() => !selectedTicket && setProjectDropdownOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--figma-neutral-85)] px-3 py-2 text-left outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ color: selectedProject ? "var(--figma-bw-black)" : "var(--figma-neutral-70)", fontSize: 18 }}
-                aria-expanded={projectDropdownOpen}
-                aria-haspopup="listbox"
-                aria-label="Projekt wählen"
-                aria-disabled={!!selectedTicket}
-              >
-                <span>{selectedProject ?? "Projekt wählen"}</span>
-                <ChevronDownIcon />
-              </button>
-              {projectDropdownOpen && (
-                <div
-                  className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-[var(--figma-neutral-85)] bg-[var(--figma-bw-white)] py-1 shadow-lg"
-                  role="listbox"
-                >
-                  <div className="border-b border-[var(--figma-neutral-85)] px-3 py-2">
-                    <input
-                      type="text"
-                      placeholder="Suchen..."
-                      readOnly
-                      className="w-full bg-transparent outline-none placeholder:italic"
-                      style={{ color: "var(--figma-neutral-70)", fontSize: 14 }}
-                      aria-label="Suche (angedeutet)"
-                    />
-                  </div>
-                  <ul className="max-h-48 overflow-y-auto py-1">
-                    <li>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={selectedProject === null}
-                        onClick={() => {
-                          setSelectedProject(null);
-                          setProjectDropdownOpen(false);
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-sans">
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <input
+                        type="time"
+                        value={startInput}
+                        readOnly={fromDetailsWhileRunning}
+                        onChange={(e) => !fromDetailsWhileRunning && setStartInput(e.target.value)}
+                        className={`tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-0 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer ${fromDetailsWhileRunning ? "bg-neutral-97 cursor-default" : "bg-white"}`}
+                        style={{
+                          borderColor: "var(--color-neutral-85)",
+                          color: "var(--color-ink)",
+                          fontSize: 18,
+                          fontWeight: 400,
                         }}
-                        className="w-full px-3 py-2 text-left hover:bg-[var(--figma-neutral-97)]"
-                        style={{ color: "var(--figma-neutral-40)", fontSize: 18 }}
-                      >
-                        — Nichts auswählen
-                      </button>
-                    </li>
-                    {PROJECT_OPTIONS.map((item) => (
-                      <li key={item}>
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={selectedProject === item}
-                          onClick={() => {
-                            setSelectedProject(item);
-                            setProjectDropdownOpen(false);
-                          }}
-                          className="w-full px-3 py-2 text-left hover:bg-[var(--figma-neutral-97)]"
-                          style={{
-                            color: "var(--figma-bw-black)",
-                            fontSize: 18,
-                          }}
-                        >
-                          {item}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
-            {/* Ticket (Dropdown) – inaktiv wenn Projekt gewählt */}
-            <div className="relative" ref={ticketDropdownRef}>
-              <button
-                type="button"
-                disabled={!!selectedProject}
-                onClick={() => !selectedProject && setTicketDropdownOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--figma-neutral-85)] px-3 py-2 text-left outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ color: selectedTicket ? "var(--figma-bw-black)" : "var(--figma-neutral-70)", fontSize: 18 }}
-                aria-expanded={ticketDropdownOpen}
-                aria-haspopup="listbox"
-                aria-label="Ticket wählen"
-                aria-disabled={!!selectedProject}
-              >
-                <span>{selectedTicket ?? "Ticket wählen"}</span>
-                <ChevronDownIcon />
-              </button>
-              {ticketDropdownOpen && (
-                <div
-                  className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-[var(--figma-neutral-85)] bg-[var(--figma-bw-white)] py-1 shadow-lg"
-                  role="listbox"
-                >
-                  <div className="border-b border-[var(--figma-neutral-85)] px-3 py-2">
+                        aria-label="Startzeit"
+                      />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-ink" aria-hidden>
+                        <Clock size={18} />
+                      </span>
+                    </div>
+                    <span className="text-ink text-lg font-normal">–</span>
+                    <div className="relative">
+                      <input
+                        type="time"
+                        value={endInput}
+                        readOnly={fromDetailsWhileRunning}
+                        onChange={(e) => !fromDetailsWhileRunning && setEndInput(e.target.value)}
+                        className={`tabular-nums rounded-lg border pl-2 pr-9 py-1.5 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-0 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer ${fromDetailsWhileRunning ? "bg-neutral-97 cursor-default" : "bg-white"}`}
+                        style={{
+                          borderColor: "var(--color-neutral-85)",
+                          color: "var(--color-ink)",
+                          fontSize: 18,
+                          fontWeight: 400,
+                        }}
+                        aria-label="Endzeit"
+                      />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-ink" aria-hidden>
+                        <Clock size={18} />
+                      </span>
+                    </div>
+                    <span className="text-ink text-lg">Uhr</span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
                     <input
                       type="text"
-                      placeholder="Suchen..."
-                      readOnly
-                      className="w-full bg-transparent outline-none placeholder:italic"
-                      style={{ color: "var(--figma-neutral-70)", fontSize: 14 }}
-                      aria-label="Suche (angedeutet)"
+                      inputMode="decimal"
+                      placeholder="0,00"
+                      value={durationDisplay}
+                      readOnly={fromDetailsWhileRunning}
+                      onChange={(e) => {
+                        if (fromDetailsWhileRunning) return;
+                        const raw = e.target.value;
+                        setDurationInput(raw);
+                        setDurationFocused(true);
+                        const hours = parseDurationHours(raw);
+                        if (hours != null && startInput) {
+                          setEndInput(endTimeFromStartAndHours(startInput, hours));
+                        } else if (hours != null && !startInput) {
+                          setStartInput(suggestedStart);
+                          setEndInput(endTimeFromStartAndHours(suggestedStart, hours));
+                        }
+                      }}
+                      onFocus={() => {
+                        if (fromDetailsWhileRunning) return;
+                        setDurationFocused(true);
+                        setDurationInput(durationFromTimes(startInput, endInput));
+                      }}
+                      onBlur={() => {
+                        if (fromDetailsWhileRunning) return;
+                        setDurationFocused(false);
+                        setDurationInput(null);
+                        const hours = parseDurationHours(durationInput ?? "");
+                        if (hours != null && hours >= 0) {
+                          if (startInput) {
+                            setEndInput(endTimeFromStartAndHours(startInput, hours));
+                          } else {
+                            setStartInput(suggestedStart);
+                            setEndInput(endTimeFromStartAndHours(suggestedStart, hours));
+                          }
+                        }
+                      }}
+                      className={`tabular-nums rounded-lg border px-2 py-1.5 w-20 text-right outline-none focus:ring-2 focus:ring-primary focus:ring-offset-0 ${fromDetailsWhileRunning ? "bg-neutral-97 cursor-default" : "bg-white"}`}
+                      style={{
+                        borderColor: "var(--color-neutral-85)",
+                        color: "var(--color-ink)",
+                        fontSize: 18,
+                        fontWeight: 400,
+                      }}
+                      aria-label="Dauer in Stunden"
                     />
+                    <span className="text-ink text-lg font-normal">h</span>
                   </div>
-                  <ul className="max-h-48 overflow-y-auto py-1">
-                    <li>
+                </div>
+
+                <Separator />
+
+                <Combobox
+                  compact={!isSheet}
+                  touchFriendly={isSheet}
+                  value={selectedProject}
+                  onChange={(value) => {
+                    setSelectedProject(value);
+                    if (value === "Pikettbereitschaft" || value === "Piketteinsatz") {
+                      setStartInput("08:00");
+                      setEndInput("16:00");
+                    }
+                  }}
+                  options={[...leistungen]}
+                  placeholder="Leistung (Bsp. Projekt, Absenz, Pikett) wählen"
+                  disabled={!!selectedTicket}
+                  ariaLabel="Leistung wählen"
+                  onAiSuggestRequest={async (query) => {
+                    if (fromDetailsWhileRunning) return null;
+                    return suggestLeistung({ query, options: [...leistungen], dateStr: modalDateStr });
+                  }}
+                  onAiSuggestionSelect={(result) => {
+                    if (result.startTime) setStartInput(result.startTime);
+                    if (result.endTime) setEndInput(result.endTime);
+                  }}
+                />
+
+                <Separator />
+
+                <Combobox
+                  compact={!isSheet}
+                  touchFriendly={isSheet}
+                  value={selectedTicket}
+                  onChange={setSelectedTicket}
+                  options={
+                    selectedTicket && !ticketOptionsBase.includes(selectedTicket)
+                      ? [selectedTicket, ...ticketOptionsBase]
+                      : ticketOptionsBase
+                  }
+                  placeholder="Ticket wählen"
+                  disabled={!!selectedProject}
+                  ariaLabel="Ticket wählen"
+                />
+                {quickFavorites.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {quickFavorites.map((fav) => (
                       <button
+                        key={fav.label}
                         type="button"
-                        role="option"
-                        aria-selected={selectedTicket === null}
+                        disabled={!!selectedTicket}
                         onClick={() => {
+                          setSelectedProject(fav.label);
                           setSelectedTicket(null);
-                          setTicketDropdownOpen(false);
                         }}
-                        className="w-full px-3 py-2 text-left hover:bg-[var(--figma-neutral-97)]"
-                        style={{ color: "var(--figma-neutral-40)", fontSize: 18 }}
+                        className={`flex items-center rounded px-2 transition-opacity disabled:cursor-not-allowed disabled:opacity-50 max-w-[200px] truncate ${isSheet ? "h-11 min-h-[44px] px-3 text-sm" : "h-[28px] text-xs"}`}
+                        style={{
+                          backgroundColor: fav.bg,
+                          color: fav.fg,
+                        }}
                       >
-                        — Nichts auswählen
+                        {fav.label}
                       </button>
-                    </li>
-                    {TICKET_OPTIONS.map((item) => (
-                      <li key={item}>
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={selectedTicket === item}
-                          onClick={() => {
-                            setSelectedTicket(item);
-                            setTicketDropdownOpen(false);
-                          }}
-                          className="w-full px-3 py-2 text-left hover:bg-[var(--figma-neutral-97)]"
-                          style={{
-                            color: "var(--figma-bw-black)",
-                            fontSize: 18,
-                          }}
-                        >
-                          {item}
-                        </button>
-                      </li>
                     ))}
-                  </ul>
+                  </div>
+                )}
+
+                <Separator />
+
+                <div>
+                  <label htmlFor="stop-modal-kommentar" className="block text-left text-ink text-sm font-medium mb-1.5">
+                    Kommentar
+                  </label>
+                  <div className="relative">
+                    <textarea
+                      id="stop-modal-kommentar"
+                      rows={3}
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      className="w-full resize-y rounded-lg border pr-10 pt-2 pb-2 pl-3 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-0"
+                      style={{
+                        borderColor: "var(--color-neutral-85)",
+                        color: "var(--color-ink)",
+                        fontSize: 14,
+                        minHeight: "4.5rem",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setComment("")}
+                      className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded text-neutral-50 hover:bg-neutral-97 hover:text-ink"
+                      aria-label="Inhalt löschen"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  {(() => {
+                    const label = selectedProject ?? selectedTicket ?? "";
+                    const ticketId = extractJiraTicketId(label);
+                    if (!ticketId || !isProjectEntry(label)) return null;
+                    const itsm = isItsmTicketId(ticketId);
+                    const url = itsm ? getItsmUrl(ticketId) : getJiraUrl(ticketId);
+                    const LinkIcon = itsm ? Ticket : SiJira;
+                    const linkClass = itsm ? "text-amber-700 hover:text-amber-800" : "text-blue-600 hover:text-blue-700";
+                    return (
+                      <div className="mt-3 pt-3 border-t border-neutral-85">
+                        <span className="text-ink text-sm font-medium block mb-1.5">
+                          {itsm ? "ITSM" : "Jira"}
+                        </span>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`inline-flex items-center gap-1.5 text-sm ${linkClass} transition-colors`}
+                        >
+                          <span className={itsm ? "inline-flex shrink-0 -translate-y-px" : "inline-flex shrink-0"}>
+                            <LinkIcon size={14} aria-hidden />
+                          </span>
+                          {ticketId}
+                        </a>
+                      </div>
+                    );
+                  })()}
                 </div>
-              )}
-            </div>
-            {/* Ticket-Shortcuts (Chips) – gleiches Layout wie TaskChip auf der Page */}
-            <div className="flex flex-wrap gap-2 pt-2">
-              <button
-                type="button"
-                disabled={!!selectedProject}
-                onClick={() => setSelectedTicket("Ticket 2445")}
-                className="flex h-[28px] items-center rounded px-2 text-xs transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  backgroundColor: "var(--figma-neutral-90)",
-                  color: "var(--figma-neutral-32)",
-                }}
-              >
-                Ticket 2445
-              </button>
-              <button
-                type="button"
-                disabled={!!selectedProject}
-                onClick={() => setSelectedTicket("Ticket 6372")}
-                className="flex h-[28px] items-center rounded px-2 text-xs transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  backgroundColor: "var(--figma-neutral-90)",
-                  color: "var(--figma-neutral-32)",
-                }}
-              >
-                Ticket 6372
-              </button>
-            </div>
 
-            <Separator />
+                {onOpenSendToMember && canSave && (
+                  <>
+                    <Separator />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const label = selectedProject ?? selectedTicket ?? "";
+                        const endForPayload = fromDetailsWhileRunning ? endTime : endInput;
+                        const fromFav = favoritesProp.find((f) => f.label === label);
+                        const style = fromFav ? { bg: fromFav.bg, fg: fromFav.fg } : getChipStyleForLabel(label);
+                        onOpenSendToMember(
+                          {
+                            text: label,
+                            bg: style.bg,
+                            fg: style.fg,
+                            startTime: startInput,
+                            endTime: endForPayload,
+                            comment,
+                            isBillable: isBillable,
+                          },
+                          modalDateStr ?? ""
+                        );
+                      }}
+                      className="flex items-center gap-2 py-2 text-primary text-sm font-medium hover:opacity-90 transition-opacity"
+                    >
+                      <UserPlus size={16} aria-hidden />
+                      An Teammitglied senden
+                    </button>
+                  </>
+                )}
 
-            {/* Kommentar */}
-            <div>
-              <label htmlFor="stop-modal-kommentar" className="block text-left" style={{ color: "var(--figma-bw-black)", fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
-                Kommentar
-              </label>
-              <div className="relative">
-                <textarea
-                  id="stop-modal-kommentar"
-                  rows={3}
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  className="w-full resize-y rounded-lg border pr-10 pt-2 pb-2 pl-3 outline-none focus:ring-2 focus:ring-[var(--figma-primary)] focus:ring-offset-0"
-                  style={{
-                    borderColor: "var(--figma-neutral-85)",
-                    color: "var(--figma-bw-black)",
-                    fontSize: 18,
-                    fontFamily: "var(--font-coop), Coop, sans-serif",
-                    minHeight: "4.5rem",
-                  }}
-                />
+                <Separator />
+
                 <button
                   type="button"
-                  onClick={() => setComment("")}
-                  className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded text-[var(--figma-neutral-70)] hover:bg-[var(--figma-neutral-97)] hover:text-[var(--figma-bw-black)]"
-                  aria-label="Inhalt löschen"
+                  onClick={() => setWeitereFelderOpen((v) => !v)}
+                  className="flex items-center justify-between gap-2 py-2 text-left text-neutral-40 text-sm hover:text-ink transition-colors w-full"
                 >
-                  <CloseIcon size={16} />
+                  Weitere Felder einblenden
+                  {weitereFelderOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
+
+                {weitereFelderOpen && (() => {
+                  const label = selectedProject ?? selectedTicket ?? "";
+                  const ticketId = extractJiraTicketId(label);
+                  if (!ticketId || !isProjectEntry(label)) {
+                    return (
+                      <p className="text-sm text-neutral-50 py-2">
+                        Wählen Sie ein Projekt oder Ticket, um Jira- oder ITSM-Details anzuzeigen.
+                      </p>
+                    );
+                  }
+                  const itsm = isItsmTicketId(ticketId);
+                  if (itsm) {
+                    const details = getMockItsmDetails(ticketId, label);
+                    const rows: { label: string; value: string }[] = [
+                      { label: "Ticket-ID", value: details.ticketId },
+                      { label: "Ticket-Name", value: details.ticketName },
+                      { label: "Ticket-Art", value: details.ticketArt },
+                      { label: "Kunde", value: details.kunde },
+                      { label: "Projekt", value: details.projekt },
+                      { label: "SLA-Service", value: details.slaService },
+                      { label: "CostCenter", value: details.costCenter },
+                      { label: "Abrechnungsart", value: details.abrechnungsart },
+                    ];
+                    return (
+                      <div className="grid grid-cols-1 gap-2 py-2">
+                        {rows.map(({ label: rowLabel, value }) => (
+                          <div key={rowLabel} className="flex flex-col gap-0.5">
+                            <span className="text-xs text-neutral-50">{rowLabel}</span>
+                            <span className="text-sm text-ink">{value || "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+                  const details = getMockJiraDetails(ticketId, label);
+                  const rows: { label: string; value: string }[] = [
+                    { label: "Projekt", value: details.projekt },
+                    { label: "Objekt Nr.", value: details.objektNr },
+                    { label: "Objekt-Betreff", value: details.objektBetreff },
+                    { label: "Objektart/LEA", value: details.objektartLea },
+                    { label: "SLA-Service", value: details.slaService },
+                    { label: "Ktr/Kst", value: details.ktrKst },
+                    { label: "Abrechnungsart", value: details.abrechnungsart },
+                    { label: "Status", value: details.status },
+                  ];
+                  return (
+                    <div className="grid grid-cols-1 gap-2 py-2">
+                      {rows.map(({ label: rowLabel, value }) => (
+                        <div key={rowLabel} className="flex flex-col gap-0.5">
+                          <span className="text-xs text-neutral-50">{rowLabel}</span>
+                          <span className="text-sm text-ink">{value || "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                <Separator />
+
+                <div className="flex items-center justify-end gap-3">
+                  <span className="text-ink text-sm">Ist verrechenbar</span>
+                  <ToggleSwitch checked={isBillable} onChange={setIsBillable} />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center justify-between px-6 py-4 border-t border-neutral-85">
+              {fromDetailsWhileRunning ? (
+                <div className="flex-1" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (initialData?.id && onDelete) {
+                      onDelete(initialData.id);
+                    } else if (acceptedSuggestionId && onDeleteSuggestion) {
+                      onDeleteSuggestion();
+                    } else {
+                      onCancel();
+                    }
+                  }}
+                  className="rounded px-2 py-1.5 font-bold hover:bg-red-100 transition-colors"
+                  style={{ color: "#b91c1c", fontSize: 14 }}
+                >
+                  Löschen
+                </button>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="rounded-lg px-4 py-2 font-bold hover:opacity-90 text-neutral-40 text-sm"
+                >
+                  Schliessen
+                </button>
+                <button
+                  type="button"
+                  disabled={!canSave}
+                  onClick={() => {
+                    const label = selectedProject ?? selectedTicket ?? "";
+                    const endForPayload = fromDetailsWhileRunning ? endTime : endInput;
+                    onConfirm(
+                      {
+                        id: initialData?.id,
+                        label,
+                        startTime: startInput,
+                        endTime: endForPayload,
+                        comment,
+                        isBillable: isBillable,
+                      },
+                      {
+                        savedWhileRunning: fromDetailsWhileRunning,
+                        barPrefillToKeep: fromDetailsWhileRunning
+                          ? { project: selectedProject, ticket: selectedTicket, comment }
+                          : undefined,
+                      }
+                    );
+                    onClose();
+                  }}
+                  className="rounded-lg px-4 py-2 font-bold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:hover:opacity-100"
+                  style={{
+                    fontSize: 14,
+                    backgroundColor: canSave ? "var(--color-primary)" : "var(--color-neutral-70)",
+                    color: "#FFFFFF",
+                  }}
+                >
+                  {fromDetailsWhileRunning ? "Übernehmen (Timer läuft weiter)" : "Speichern"}
                 </button>
               </div>
             </div>
-
-            <Separator />
-
-            <button
-              type="button"
-              className="flex items-center gap-2 py-2 text-left"
-              style={{ color: "var(--figma-neutral-40)", fontSize: 14 }}
-            >
-              <ChevronDownIcon />
-              Weitere Felder einblenden
-            </button>
-
-            <Separator />
-
-            <div className="flex items-center justify-end gap-3">
-              <span style={{ color: "var(--figma-bw-black)", fontSize: 14 }}>Ist verrechenbar</span>
-              <ToggleSwitch checked={isBillable} onChange={setIsBillable} />
-            </div>
-          </div>
+          </Dialog.Content>
         </div>
-
-        {/* Footer */}
-        <div
-          className="flex shrink-0 items-center justify-between px-6 py-4"
-          style={{ borderTop: "1px solid var(--figma-neutral-85)" }}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              if (initialData?.id && onDelete) {
-                onDelete(initialData.id);
-              } else {
-                onCancel();
-              }
-            }}
-            className="rounded px-2 py-1.5 font-bold hover:bg-[var(--figma-red-2)]"
-            style={{ color: "var(--figma-neutral-40)", fontSize: 14 }}
-          >
-            Löschen
-          </button>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg px-4 py-2 font-bold hover:opacity-90"
-              style={{ color: "var(--figma-neutral-40)", fontSize: 14 }}
-            >
-              Abbrechen
-            </button>
-            <button
-              type="button"
-              disabled={!canSave}
-              onClick={() => {
-                const label = selectedProject ?? selectedTicket ?? "";
-                onConfirm({
-                  id: initialData?.id,
-                  label,
-                  startTime: startInput,
-                  endTime: endInput,
-                  comment,
-                  isBillable: isBillable,
-                });
-                onClose();
-              }}
-              className="rounded-lg px-4 py-2 font-bold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:hover:opacity-100"
-              style={{
-                fontSize: 14,
-                backgroundColor: canSave ? "var(--figma-primary)" : "#B5B1AD",
-                color: "#FFFFFF",
-              }}
-            >
-              Speichern
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
 function Separator() {
-  return <div className="my-3 border-t border-[var(--figma-neutral-85)]" />;
-}
-
-function ClockIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 6v6l4 2" />
-    </svg>
-  );
-}
-
-function CloseIcon({ small, size }: { small?: boolean; size?: number }) {
-  const s = size ?? (small ? 10 : 16);
-  return (
-    <svg width={s} height={s} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return <div className="my-3 border-t border-neutral-85" />;
 }
 
 function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="h-6 w-11 rounded-full px-1 transition-colors"
-      style={{ backgroundColor: checked ? "var(--figma-primary)" : "var(--figma-neutral-80)" }}
+    <Switch.Root
+      checked={checked}
+      onCheckedChange={onChange}
+      className="h-6 w-11 rounded-full px-1 transition-colors data-[state=checked]:bg-primary data-[state=unchecked]:bg-neutral-80"
     >
-      <span
-        className="block h-4 w-4 rounded-full bg-white shadow transition-transform"
-        style={{ transform: checked ? "translateX(18px)" : "translateX(2px)" }}
+      <Switch.Thumb
+        className="block h-4 w-4 rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0.5"
       />
-    </button>
+    </Switch.Root>
   );
 }

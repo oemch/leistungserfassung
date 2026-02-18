@@ -1,24 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getSupabaseAdmin } from "@/lib/supabase-server";
 
 interface UserRequestBody {
   first_name: string;
   last_name: string;
   email: string;
-  // Füge hier weitere Felder hinzu, je nach Bedarf
-}
-
-function getSupabaseAdmin() {
-  const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !serviceKey) {
-    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
-  }
-
-  return createClient(url, serviceKey, {
-    auth: { persistSession: false },
-  });
 }
 
 export async function POST(req: Request) {
@@ -29,7 +15,6 @@ export async function POST(req: Request) {
     const last_name = String(body.last_name ?? "").trim();
     const email = String(body.email ?? "").trim().toLowerCase();
 
-    // Validation
     if (!first_name || !last_name || !email) {
       return NextResponse.json(
         { error: "first_name, last_name und email sind Pflichtfelder" },
@@ -37,7 +22,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return NextResponse.json({ error: "Invalid email format" }, { status: 400 });

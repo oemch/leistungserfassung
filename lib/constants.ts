@@ -1,6 +1,25 @@
 import type { FavoriteItem, ViewMode } from "./types";
 
-export const VIEWS: readonly ViewMode[] = ["Tag", "Woche", "Monat", "Jahr"];
+export const DEFAULT_USER_SLUG = "sara_meier";
+
+export const VIEWS: readonly ViewMode[] = ["Tag", "Woche", "Monat", "Jahr", "Liste"];
+
+export const TARGET_HOURS_PER_WEEK = 40;
+
+const TARGET_HOURS_BY_USER: Record<string, number> = {
+  sara_meier: 32,
+  marco_keller: 40,
+};
+
+export function getTargetHoursPerWeek(userSlug: string): number {
+  return TARGET_HOURS_BY_USER[userSlug] ?? TARGET_HOURS_PER_WEEK;
+}
+
+/** Soll-Stunden pro Arbeitstag. Bei 80% (32h) ist ein Tag frei → 32/4 = 8h. Bei 100% (40h) → 40/5 = 8h. */
+export function getSollPerDay(targetHoursPerWeek: number): number {
+  if (targetHoursPerWeek <= 32) return targetHoursPerWeek / 4; // 80%: 4 Arbeitstage
+  return targetHoursPerWeek / 5;
+}
 
 export const WOCHENTAGE = [
   "Montag",
@@ -12,49 +31,78 @@ export const WOCHENTAGE = [
   "Sonntag",
 ] as const;
 
+export const WOCHENTAGE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"] as const;
+
 export const FAVORITEN: FavoriteItem[] = [
-  { label: "Projekt A", bg: "#FFF5D6", fg: "#92400e" },
-  { label: "Projekt B", bg: "#E6DEF3", fg: "#5b21b6" },
-  { label: "Projekt C", bg: "#D5EEEB", fg: "#0f766e" },
-  { label: "T-0000 Beschreibung", bg: "#FDE7E6", fg: "#b91c1c" },
-  { label: "T-99999 Beschreibungstext", bg: "#E1F2E2", fg: "#166534" },
+  { label: "Migros Bank | Banking Platform | PROJ-2847", bg: "#FFF5D6", fg: "#00271D" },
+  { label: "Clientis | Cyber Security | PROJ-4521", bg: "#E6DEF3", fg: "#00271D" },
+  { label: "St.Galler KB | Banking Platform | PROJ-6122", bg: "#D5EEEB", fg: "#00271D" },
+  { label: "Meeting intern", bg: "#EFEEED", fg: "#00271D" },
+  { label: "Administration", bg: "#EFEEED", fg: "#00271D" },
+  { label: "Interne Schulung (IS)", bg: "#EFEEED", fg: "#00271D" },
+  { label: "Ferien", bg: "#EFEEED", fg: "#00271D" },
 ];
 
-export const PROJECT_OPTIONS = [
-  "Projekt A",
-  "Projekt B",
-  "Projekt C",
-  "Projekt D",
-  "Interne Schulung (IS)",
-  "Administration",
+export const LEISTUNG_OPTIONS = [
+  "Ferien",
+  "Krankheit",
+  "Heirat in der Familie oder Verwandtschaft",
+  "Meeting intern",
+  "Pikettbereitschaft",
+  "Piketteinsatz",
 ] as const;
+
+export const PROJECT_OPTIONS = LEISTUNG_OPTIONS;
 
 export const TICKET_OPTIONS = [
-  "Feature 1234",
-  "Feature 8392",
-  "Ticket 2445",
-  "Ticket 6372",
+  "INC-4521",
+  "CHG-892",
+  "INC-4522",
+  "CHG-893",
+  "INC-4527",
+  "CHG-895",
 ] as const;
 
-/** Schriftfarbe für alle Chips (Kacheln, Favoriten). */
 export const CHIP_FG = "#00271D";
 
-/** Chip-Hintergrundfarben pro Projekt/Ticket – wie Demo-Kacheln 16.–20.2. und Favoriten. */
 const CHIP_BG: Record<string, string> = {
-  "Projekt A": "#FFF5D6",
-  "Projekt B": "#E6DEF3",
-  "Projekt C": "#D5EEEB",
-  "Projekt D": "var(--figma-neutral-90)",
-  "Interne Schulung (IS)": "var(--figma-neutral-90)",
-  Administration: "var(--figma-neutral-90)",
-  "Feature 1234": "#D5EEEB",
-  "Feature 8392": "#E6DEF3",
-  "Ticket 2445": "#D5EEEB",
-  "Ticket 6372": "#D5EEEB",
+  Ferien: "#EFEEED",
+  Krankheit: "#EFEEED",
+  "Heirat in der Familie oder Verwandtschaft": "#EFEEED",
+  "Meeting intern": "#EFEEED",
+  Pikettbereitschaft: "#EFEEED",
+  Piketteinsatz: "#EFEEED",
+  "Interne Schulung (IS)": "#EFEEED",
+  Administration: "#EFEEED",
+  "Frei (80%)": "#EFEEED",
+  "Migros Bank | Banking Platform | PROJ-2847": "#FFF5D6",
+  "Clientis | Cyber Security | PROJ-4521": "#E6DEF3",
+  "St.Galler KB | Banking Platform | PROJ-6122": "#D5EEEB",
+  "Nidwaldner KB | ix.Cloud | PROJ-2211": "#E2F0E2",
+  "Lernende betreuen": "#FFF5D6",
+  "Weekly im Team": "#EFEEED",
+  "INC-4521": "#D5EEEB",
+  "CHG-892": "#E6DEF3",
+  "INC-4522": "#D5EEEB",
+  "CHG-893": "#E6DEF3",
+  "INC-4527": "#D5EEEB",
+  "CHG-895": "#E6DEF3",
 };
 
-/** Liefert bg/fg für einen gespeicherten Eintrag anhand des Labels (Projekt/Ticket). */
+export function sortOptionsByRecent(options: readonly string[], recentLabels: string[]): string[] {
+  const set = new Set(options);
+  const result: string[] = [];
+  for (const label of recentLabels) {
+    if (set.has(label)) result.push(label);
+  }
+  for (const opt of options) {
+    if (!result.includes(opt)) result.push(opt);
+  }
+  return result;
+}
+
 export function getChipStyleForLabel(label: string): { bg: string; fg: string } {
-  const bg = CHIP_BG[label] ?? "var(--figma-neutral-90)";
-  return { bg, fg: CHIP_FG };
+  const exact = CHIP_BG[label];
+  if (exact) return { bg: exact, fg: CHIP_FG };
+  return { bg: "#EFEEED", fg: CHIP_FG };
 }
